@@ -1,0 +1,9 @@
+import {mkdir,copyFile,readFile,writeFile} from 'node:fs/promises';
+const root=new URL('../',import.meta.url);
+const html=await readFile(new URL('index.html',root),'utf8');
+const source=await readFile(new URL('worker/index.js',root),'utf8');
+await mkdir(new URL('dist/server/',root),{recursive:true});
+await mkdir(new URL('dist/.openai/',root),{recursive:true});
+await writeFile(new URL('dist/server/index.js',root),source.replace("export default createWorker('');",'export default createWorker('+JSON.stringify(html)+');'));
+await copyFile(new URL('.openai/hosting.json',root),new URL('dist/.openai/hosting.json',root));
+console.log('Construido desde index.html');
