@@ -1,5 +1,16 @@
 const SOURCES={juegos:[{name:'VidaExtra',url:'https://www.vidaextra.com/index.xml'}],politica:[{name:'elDiario.es',url:'https://www.eldiario.es/rss/politica/'}],baloncesto:[{name:'Mundo Deportivo',url:'https://www.mundodeportivo.com/feed/rss/baloncesto'}],ia:[{name:'Xataka · IA',url:'https://www.xataka.com/tag/inteligencia-artificial/rss2.xml'}],informatica:[{name:'Xataka',url:'https://www.xataka.com/index.xml'},{name:'Xataka · Computación cuántica',url:'https://www.xataka.com/tag/computacion-cuantica/rss2.xml'},{name:'Xataka · Semiconductores',url:'https://www.xataka.com/tag/semiconductores/rss2.xml'},{name:'Microsiervos',url:'https://www.microsiervos.com/index.xml'}],proyectos:[{name:'Show HN',type:'projects',url:'https://hn.algolia.com/api/v1/search_by_date'}]};
+import {combineNews, selectRecent} from './selection.js';
 const cache=new Map();
+export async function findArticle(url,category){
+ if(Object.hasOwn(SOURCES,category)){const data=await news(category);const article=data.articles.find(a=>a.url===url);if(article)return article;}
+ return (await allNews()).articles.find(a=>a.url===url)||null;
+}
+export async function allNews(){
+ const categories=Object.keys(SOURCES);
+ const results=await Promise.allSettled(categories.map(category=>news(category)));
+ const coverage=categories.map((category,i)=>({category,count:results[i].status==='fulfilled'?results[i].value.articles.length:0,warning:results[i].status==='fulfilled'?results[i].value.warning:'Fuente no disponible'}));
+ return {articles:combineNews(results.filter(r=>r.status==='fulfilled').map(r=>r.value)),coverage,updatedAt:new Date().toISOString(),warning:coverage.some(c=>c.warning||!c.count)?'Algunas fuentes no están disponibles. La selección solo incluye las noticias recibidas.':null};
+}
 export function decode(v=''){return v.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g,'$1').replace(/&#(x[\da-f]+|\d+);/gi,(_,n)=>{const p=n[0].toLowerCase()==='x'?parseInt(n.slice(1),16):Number(n);return p>0&&p<=0x10ffff?String.fromCodePoint(p):'';}).replace(/&nbsp;/g,' ').replace(/&quot;/g,'"').replace(/&apos;/g,"'").replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&');}
 function plain(v){return decode(decode(v).replace(/<[^>]*>/g,' ')).replace(/\s+/g,' ').trim();}
 function tag(xml,name){return(xml.match(new RegExp('<'+name+'(?:\\s[^>]*)?>([\\s\\S]*?)<\\/'+name+'>','i'))||[])[1]||'';}
@@ -15,24 +26,21 @@ export function categoryFilter(a,c){
  return true;
 }
 export function parseProjects(hits){
- return hits.filter(h=>Number(h.points)>=50 && /\b(AI|LLM|GPT|ChatGPT|Claude|Gemini|agents?|vibe.cod(?:ing|ed)|artificial intelligence|machine learning)\b/i.test((h.title||'')+' '+(h.story_text||''))).map(h=>{
+ return hits.filter(h=>Number(h.points)>=50).map(h=>{
  const discussionUrl='https://news.ycombinator.com/item?id='+encodeURIComponent(h.objectID);
  const timestamp=Date.parse(h.created_at);
- return {title:plain(h.title||'').replace(/^Show HN:\s*/i,''),url:safeUrl(h.url)||discussionUrl,description:'Proyecto presentado por '+plain(h.author||'su creador')+'. '+Number(h.points)+' puntos y '+Number(h.num_comments||0)+' comentarios en Hacker News. Publicación original en inglés.',image:'',source:'Show HN · Hacker News',category:'proyectos',publishedAt:Number.isFinite(timestamp)?new Date(timestamp).toISOString():null,points:Number(h.points),comments:Number(h.num_comments||0),discussionUrl};
+ return {title:plain(h.title||'').replace(/^Show HN:\s*/i,''),url:safeUrl(h.url)||discussionUrl,description:(plain(h.story_text||'').slice(0,1200)||'Proyecto presentado por '+plain(h.author||'su creador')+'.')+' '+Number(h.points)+' puntos y '+Number(h.num_comments||0)+' comentarios en Hacker News. Publicación original en inglés.',image:'',source:'Show HN · Hacker News',category:'proyectos',publishedAt:Number.isFinite(timestamp)?new Date(timestamp).toISOString():null,points:Number(h.points),comments:Number(h.num_comments||0),discussionUrl};
  }).filter(a=>a.title);
 }
 async function fetchProjects(){
  const since=Math.floor(Date.now()/1000)-90*86400;
- const queries=['AI','Claude','vibe coding'];
- const responses=await Promise.allSettled(queries.map(async query=>{
-  const params=new URLSearchParams({tags:'show_hn',query,hitsPerPage:'50',numericFilters:'points>=50,created_at_i>'+since});
-  const response=await fetch('https://hn.algolia.com/api/v1/search_by_date?'+params,{signal:AbortSignal.timeout(12000)});
-  if(!response.ok)throw Error('Proyectos no disponibles');const data=await response.json();if(!Array.isArray(data.hits))throw Error('Respuesta no válida');return data.hits;
- }));
- if(responses.every(r=>r.status==='rejected'))throw Error('Proyectos no disponibles');
- return parseProjects(responses.flatMap(r=>r.status==='fulfilled'?r.value:[]));
+ const params=new URLSearchParams({tags:'show_hn',hitsPerPage:'50',numericFilters:'points>=50,created_at_i>'+since});
+ const response=await fetch('https://hn.algolia.com/api/v1/search_by_date?'+params,{signal:AbortSignal.timeout(12000)});
+ if(!response.ok)throw Error('Proyectos no disponibles');
+ const data=await response.json();if(!Array.isArray(data.hits))throw Error('Respuesta no válida');
+ return parseProjects(data.hits);
 }
 async function fetchFeed(s,c){if(s.type==='projects')return fetchProjects();const r=await fetch(s.url,{headers:{Accept:'application/rss+xml, application/xml, text/xml','User-Agent':'MiDiario/1.0 (personal RSS reader)'},signal:AbortSignal.timeout(12000)});if(!r.ok)throw Error('Fuente no disponible');const xml=await r.text();if(xml.length>5000000)throw Error('Fuente demasiado grande');const a=parseFeed(xml,s,c).filter(a=>categoryFilter(a,c));if(!a.length)throw Error('Sin artículos');return a;}
 async function news(c){const old=cache.get(c);if(old&&Date.now()-old.time<300000)return {...old.data,cached:true};const results=await Promise.allSettled(SOURCES[c].map(s=>fetchFeed(s,c)));const a=results.flatMap(r=>r.status==='fulfilled'?r.value:[]);if(!a.length&&old)return {...old.data,stale:true,warning:'La fuente no responde. Se muestra la última consulta disponible.'};const articles=[...new Map(a.map(i=>[i.url,i])).values()].sort((a,b)=>c==='proyectos'?(b.points-a.points||Date.parse(b.publishedAt||0)-Date.parse(a.publishedAt||0)):Date.parse(b.publishedAt||0)-Date.parse(a.publishedAt||0)).slice(0,50);const data={articles,updatedAt:new Date().toISOString(),warning:results.some(r=>r.status==='rejected')?'No se ha podido consultar la fuente. Vuelve a intentarlo o abre el medio original.':null};if(a.length)cache.set(c,{time:Date.now(),data});return data;}
-export function createWorker(HTML){return {async fetch(request){const u=new URL(request.url);if(request.method!=='GET')return new Response('Método no permitido',{status:405,headers:{Allow:'GET'}});if(u.pathname==='/api/health')return Response.json({app:'mi-diario',version:4});if(u.pathname==='/api/news'){const c=u.searchParams.get('category')||'juegos';if(!Object.hasOwn(SOURCES,c))return Response.json({error:'Categoría no válida'},{status:400});return Response.json(await news(c),{headers:{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});}if(u.pathname!=='/'&&u.pathname!=='/index.html')return new Response('Página no encontrada',{status:404});return new Response(HTML,{headers:{'Content-Type':'text/html; charset=utf-8','X-Content-Type-Options':'nosniff','Referrer-Policy':'strict-origin-when-cross-origin','Content-Security-Policy':"default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src https: http: data:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'"}});}};}
+export function createWorker(HTML,SUMMARY="",LIBRARY=""){return {async fetch(request){const u=new URL(request.url);if(request.method!=='GET')return new Response('Método no permitido',{status:405,headers:{Allow:'GET'}});if(u.pathname==='/news-library.js')return new Response(LIBRARY,{headers:{'Content-Type':'text/javascript; charset=utf-8','X-Content-Type-Options':'nosniff'}});if(u.pathname==='/api/health')return Response.json({app:'mi-diario',version:6});if(u.pathname==='/api/news'){const c=u.searchParams.get('category')||'juegos';if(c==='importantes'){const data=await allNews();return Response.json({...data,articles:selectRecent(data.articles).slice(0,30),selectionMode:'automatic'}, {headers:{'Cache-Control':'no-store'}});}if(!Object.hasOwn(SOURCES,c))return Response.json({error:'Categoría no válida'},{status:400});return Response.json(await news(c),{headers:{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});}if(u.pathname==='/noticia')return new Response(SUMMARY,{headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; img-src https: data:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'"}});if(u.pathname!=='/'&&u.pathname!=='/index.html')return new Response('Página no encontrada',{status:404});return new Response(HTML,{headers:{'Content-Type':'text/html; charset=utf-8','X-Content-Type-Options':'nosniff','Referrer-Policy':'strict-origin-when-cross-origin','Content-Security-Policy':"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; img-src https: http: data:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'"}});}};}
 export default createWorker('');

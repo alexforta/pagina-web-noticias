@@ -2,13 +2,15 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $localUrl = 'http://127.0.0.1:3210'
 function Test-MiDiario {
-    try { $health = Invoke-RestMethod -Uri ($localUrl + '/api/health') -TimeoutSec 2; return ($health.app -eq 'mi-diario' -and $health.version -eq 4) } catch { return $false }
+    try { $health = Invoke-RestMethod -Uri ($localUrl + '/api/health') -TimeoutSec 2; return ($health.app -eq 'mi-diario' -and $health.version -eq 6) } catch { return $false }
 }
 try {
     if (-not (Test-MiDiario)) {
         $nodeCommand = Get-Command node -ErrorAction SilentlyContinue
         if ($nodeCommand) { $nodePath = $nodeCommand.Source } else { $nodePath = Join-Path $env:USERPROFILE '.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node.exe' }
         if (-not (Test-Path -LiteralPath $nodePath)) { throw 'No se encuentra Node.js. Instala Node.js 22 o superior para abrir la web.' }
+        $codexCommand = Get-Command codex -ErrorAction SilentlyContinue
+        if ($codexCommand) { $env:MI_DIARIO_CODEX = $codexCommand.Source }
         $logDirectory = Join-Path $projectRoot '.sites-runtime'
         New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
         $serverProcess = Start-Process -FilePath $nodePath -ArgumentList @('scripts/preview.mjs') -WorkingDirectory $projectRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $logDirectory 'local-server.log') -RedirectStandardError (Join-Path $logDirectory 'local-server-error.log')

@@ -1,0 +1,6 @@
+{
+  "type":"object",
+  "additionalProperties":false,
+  "required":["assessments"],
+  "properties":{"assessments":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["id","score","reason"],"properties":{"id":{"type":"integer"},"score":{"type":"number"},"reason":{"type":"string"}}}}}
+}
